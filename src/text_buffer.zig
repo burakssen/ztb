@@ -12,12 +12,18 @@ original_buffer: std.ArrayList(u8), // Original file content (immutable)
 add_buffer: std.ArrayList(u8), // All additions go here
 pieces: std.ArrayList(Piece), // Piece table describing document structure
 
+// Cache for faster lookups
+cached_piece_idx: usize,
+cached_piece_offset: usize,
+
 pub fn init(allocator: std.mem.Allocator) TextBuffer {
     return .{
         .allocator = allocator,
         .original_buffer = .empty,
         .add_buffer = .empty,
         .pieces = .empty,
+        .cached_piece_idx = 0,
+        .cached_piece_offset = 0,
     };
 }
 
@@ -27,11 +33,23 @@ pub fn deinit(self: *TextBuffer) void {
     self.pieces.deinit(self.allocator);
 }
 
-fn findPieceIndexAt(self: *const TextBuffer, pos: usize) struct { index: usize, offset: usize, found: bool } {
+fn findPieceIndexAt(self: *TextBuffer, pos: usize) struct { index: usize, offset: usize, found: bool } {
     var offset: usize = 0;
-    for (self.pieces.items, 0..) |piece, i| {
+    var start_idx: usize = 0;
+
+    // Use cache if valid and useful
+    if (pos >= self.cached_piece_offset and self.cached_piece_idx < self.pieces.items.len) {
+        offset = self.cached_piece_offset;
+        start_idx = self.cached_piece_idx;
+    }
+
+    for (self.pieces.items[start_idx..], 0..) |piece, i| {
+        const actual_idx = start_idx + i;
         if (offset + piece.length > pos) {
-            return .{ .index = i, .offset = offset, .found = true };
+            // Update cache
+            self.cached_piece_idx = actual_idx;
+            self.cached_piece_offset = offset;
+            return .{ .index = actual_idx, .offset = offset, .found = true };
         }
         offset += piece.length;
     }
@@ -66,6 +84,10 @@ pub fn insert(self: *TextBuffer, pos: usize, text: []const u8) !?*Edit {
         edit_ptr.deinit(self.allocator);
         self.allocator.destroy(edit_ptr);
     }
+
+    // Invalidate cache on modification
+    self.cached_piece_idx = 0;
+    self.cached_piece_offset = 0;
 
     const loc = self.findPieceIndexAt(pos);
 
@@ -118,6 +140,10 @@ pub fn delete(self: *TextBuffer, start: usize, end: usize) !?*Edit {
         edit_ptr.deinit(self.allocator);
         self.allocator.destroy(edit_ptr);
     }
+
+    // Invalidate cache on modification
+    self.cached_piece_idx = 0;
+    self.cached_piece_offset = 0;
 
     var offset: usize = 0;
     var i: usize = 0;
@@ -199,7 +225,7 @@ pub fn length(self: *const TextBuffer) usize {
 }
 
 /// Get character at position
-pub fn charAt(self: *const TextBuffer, pos: usize) ?u8 {
+pub fn charAt(self: *TextBuffer, pos: usize) ?u8 {
     const loc = self.findPieceIndexAt(pos);
     if (!loc.found) return null;
 
@@ -252,13 +278,13 @@ pub fn getLineCol(self: *const TextBuffer, pos: usize) !LineCol {
         // If pos is beyond this piece
         if (offset + piece_len < pos) {
             const slice = buffer[piece.start .. piece.start + piece_len];
-            for (slice) |c| {
-                if (c == '\n') {
-                    current_line += 1;
-                    current_col = 0;
-                } else {
-                    current_col += 1;
-                }
+            const newlines = std.mem.count(u8, slice, "\n");
+            if (newlines > 0) {
+                current_line += newlines;
+                const last_nl = std.mem.lastIndexOfScalar(u8, slice, '\n').?;
+                current_col = slice.len - 1 - last_nl;
+            } else {
+                current_col += slice.len;
             }
             offset += piece_len;
             continue;
@@ -267,13 +293,13 @@ pub fn getLineCol(self: *const TextBuffer, pos: usize) !LineCol {
         // Pos is in this piece (or at end of it)
         const target_in_piece = pos - offset;
         const slice = buffer[piece.start .. piece.start + target_in_piece];
-        for (slice) |c| {
-            if (c == '\n') {
-                current_line += 1;
-                current_col = 0;
-            } else {
-                current_col += 1;
-            }
+        const newlines = std.mem.count(u8, slice, "\n");
+        if (newlines > 0) {
+            current_line += newlines;
+            const last_nl = std.mem.lastIndexOfScalar(u8, slice, '\n').?;
+            current_col = slice.len - 1 - last_nl;
+        } else {
+            current_col += slice.len;
         }
         return LineCol{ .line = current_line, .col = current_col };
     }
@@ -290,6 +316,20 @@ pub fn getOffset(self: *const TextBuffer, line: usize, col: usize) !usize {
     for (self.pieces.items) |piece| {
         const buffer = if (piece.buffer == .original) self.original_buffer.items else self.add_buffer.items;
         const slice = buffer[piece.start .. piece.start + piece.length];
+
+        // Optimization: Check if target line is even in this piece
+        const newlines_in_piece = std.mem.count(u8, slice, "\n");
+        if (current_line + newlines_in_piece < line) {
+            current_line += newlines_in_piece;
+            if (newlines_in_piece > 0) {
+                const last_nl = std.mem.lastIndexOfScalar(u8, slice, '\n').?;
+                current_col = slice.len - 1 - last_nl;
+            } else {
+                current_col += slice.len;
+            }
+            offset += piece.length;
+            continue;
+        }
 
         for (slice, 0..) |c, i| {
             if (current_line == line and current_col == col) {

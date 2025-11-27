@@ -1,9 +1,9 @@
 const std = @import("std");
-const ztb = @import("ztb"); // This will now re-export everything
+const ztb = @import("ztb");
 const TextBuffer = ztb.TextBuffer;
 const History = ztb.History;
 const io = ztb.io;
-const search_mod = ztb.search; // Renamed to avoid conflict with `search` function
+const search_mod = ztb.search;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -19,16 +19,13 @@ pub fn main() !void {
     const file = try std.fs.cwd().openFile("test_save.txt", .{});
     defer file.close();
 
-    var file_buffer: [1024]u8 = undefined;
-    var file_reader = file.reader(&file_buffer);
-    var reader = &file_reader.interface;
+    const content = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+    defer allocator.free(content);
 
-    var writer: std.Io.Writer.Allocating = .init(allocator);
-    defer writer.deinit();
+    try io.loadContent(&buffer, content);
+    try search_mod.replaceAll(&buffer, "Mime", "Line");
 
-    _ = try reader.stream(&writer.writer, .unlimited);
-
-    try io.loadContent(&buffer, writer.written());
-
-    try search_mod.replaceAll(&buffer, "Line", "Mime");
+    io.save(&buffer, "test_save.txt") catch |err| {
+        std.debug.print("Error saving file: {any}\n", .{err});
+    };
 }

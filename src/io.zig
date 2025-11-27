@@ -17,8 +17,8 @@ pub fn save(buffer: *const TextBuffer, file_path: []const u8) !void {
     defer file.close();
 
     var file_buffer: [1024]u8 = undefined;
-    const buffered_writer = file.writer(&file_buffer);
-    var writer = buffered_writer.interface;
+    var buffered_writer = file.writer(&file_buffer);
+    var writer = &buffered_writer.interface;
 
     for (buffer.pieces.items) |piece| {
         const buf = if (piece.buffer == .original) buffer.original_buffer.items else buffer.add_buffer.items;

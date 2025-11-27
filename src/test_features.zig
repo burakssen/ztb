@@ -65,6 +65,27 @@ test "search across pieces" {
     try std.testing.expectEqual(@as(usize, 3), results.items[0]);
 }
 
+test "search boundary conditions" {
+    const allocator = std.testing.allocator;
+    var buffer = TextBuffer.init(allocator);
+    defer buffer.deinit();
+
+    // Create a buffer with two pieces
+    try io.loadContent(&buffer, "Part1");
+    if (try buffer.insert(5, "Part2")) |edit_ptr| {
+        edit_ptr.deinit(allocator);
+        allocator.destroy(edit_ptr);
+    }
+
+    // "Part1Part2"
+    // Search for "1P" which crosses the boundary
+    var results = try search_mod.search(&buffer, "1P");
+    defer results.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), results.items.len);
+    try std.testing.expectEqual(@as(usize, 4), results.items[0]);
+}
+
 test "replace and replaceAll" {
     const allocator = std.testing.allocator;
     var buffer = TextBuffer.init(allocator);
