@@ -4,44 +4,20 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const core_mod = b.createModule(.{
-        .root_source_file = b.path("src/core/core.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const features_mod = b.createModule(.{
-        .root_source_file = b.path("src/features/features.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "core", .module = core_mod },
-        },
-    });
-
     const ztb_mod = b.addModule("ztb", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "core", .module = core_mod },
-            .{ .name = "features", .module = features_mod },
-        },
     });
 
-    const tests_mod = b.createModule(.{
-        .root_source_file = b.path("src/tests/tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "core", .module = core_mod },
-            .{ .name = "features", .module = features_mod },
-        },
-    });
     // Tests
     const tests = b.addTest(.{
         .name = "ztb_test",
-        .root_module = tests_mod,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/buffer.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const run_tests = b.addRunArtifact(tests);

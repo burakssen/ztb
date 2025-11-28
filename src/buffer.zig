@@ -1,22 +1,21 @@
 const std = @import("std");
 
-const Piece = @import("piece.zig");
-const Edit = @import("edit.zig");
-const LineCol = @import("line_col.zig");
+const types = @import("types.zig");
+const Piece = types.Piece;
+const Edit = types.Edit;
+const LineCol = types.LineCol;
 
-/// High-performance text buffer using Piece Table data structure
-const TextBuffer = @This();
+const Buffer = @This();
 
 allocator: std.mem.Allocator,
-original_buffer: std.ArrayList(u8), // Original file content (immutable)
-add_buffer: std.ArrayList(u8), // All additions go here
-pieces: std.ArrayList(Piece), // Piece table describing document structure
+original_buffer: std.ArrayList(u8),
+add_buffer: std.ArrayList(u8),
+pieces: std.ArrayList(Piece),
 
-// Cache for faster lookups
 cached_piece_idx: usize,
 cached_piece_offset: usize,
 
-pub fn init(allocator: std.mem.Allocator) TextBuffer {
+pub fn init(allocator: std.mem.Allocator) Buffer {
     return .{
         .allocator = allocator,
         .original_buffer = .empty,
@@ -27,13 +26,34 @@ pub fn init(allocator: std.mem.Allocator) TextBuffer {
     };
 }
 
-pub fn deinit(self: *TextBuffer) void {
+pub fn deinit(self: *Buffer) void {
     self.original_buffer.deinit(self.allocator);
     self.add_buffer.deinit(self.allocator);
     self.pieces.deinit(self.allocator);
 }
 
-fn findPieceIndexAt(self: *TextBuffer, pos: usize) struct { index: usize, offset: usize, found: bool } {
+/// Load initial content into the buffer (treated as original/immutable)
+/// This should typically be called immediately after init.
+pub fn load(self: *Buffer, content: []const u8) !void {
+    // Ensure we start clean if this is called
+    self.original_buffer.clearRetainingCapacity();
+    self.add_buffer.clearRetainingCapacity();
+    self.pieces.clearRetainingCapacity();
+
+    try self.original_buffer.appendSlice(self.allocator, content);
+    if (content.len > 0) {
+        try self.pieces.append(self.allocator, .{
+            .buffer_type = .original,
+            .start = 0,
+            .length = content.len,
+        });
+    }
+
+    self.cached_piece_idx = 0;
+    self.cached_piece_offset = 0;
+}
+
+fn findPieceIndexAt(self: *Buffer, pos: usize) struct { index: usize, offset: usize, found: bool } {
     var offset: usize = 0;
     var start_idx: usize = 0;
 
@@ -49,22 +69,23 @@ fn findPieceIndexAt(self: *TextBuffer, pos: usize) struct { index: usize, offset
             // Update cache
             self.cached_piece_idx = actual_idx;
             self.cached_piece_offset = offset;
-            return .{ .index = actual_idx, .offset = offset, .found = true };
+            return . { .index = actual_idx, .offset = offset, .found = true };
         }
         offset += piece.length;
     }
-    return .{ .index = self.pieces.items.len, .offset = offset, .found = false };
+    return . { .index = self.pieces.items.len, .offset = offset, .found = false };
 }
 
 /// Insert text at a specific position
-pub fn insert(self: *TextBuffer, pos: usize, text: []const u8) !?*Edit {
+pub fn insert(self: *Buffer, lc: LineCol, text: []const u8) !?*Edit {
+    const pos = try self.getOffset(lc.line, lc.col);
     if (text.len == 0) return null;
 
     const add_start = self.add_buffer.items.len;
     try self.add_buffer.appendSlice(self.allocator, text);
 
     const new_piece = Piece{
-        .buffer = .add,
+        .buffer_type = .add,
         .start = add_start,
         .length = text.len,
     };
@@ -107,8 +128,8 @@ pub fn insert(self: *TextBuffer, pos: usize, text: []const u8) !?*Edit {
 
         try edit_ptr.old_pieces.append(self.allocator, piece);
 
-        const left = Piece{ .buffer = piece.buffer, .start = piece.start, .length = split_offset };
-        const right = Piece{ .buffer = piece.buffer, .start = piece.start + split_offset, .length = piece.length - split_offset };
+        const left = Piece{ .buffer_type = piece.buffer_type, .start = piece.start, .length = split_offset };
+        const right = Piece{ .buffer_type = piece.buffer_type, .start = piece.start + split_offset, .length = piece.length - split_offset };
 
         try edit_ptr.new_pieces.append(self.allocator, left);
         try edit_ptr.new_pieces.append(self.allocator, new_piece);
@@ -125,7 +146,9 @@ pub fn insert(self: *TextBuffer, pos: usize, text: []const u8) !?*Edit {
 }
 
 /// Delete text from start to end position
-pub fn delete(self: *TextBuffer, start: usize, end: usize) !?*Edit {
+pub fn delete(self: *Buffer, lc_start: LineCol, lc_end: LineCol) !?*Edit {
+    const start = try self.getOffset(lc_start.line, lc_start.col);
+    const end = try self.getOffset(lc_end.line, lc_end.col);
     if (start >= end) return null;
 
     var edit_ptr = try self.allocator.create(Edit); // Allocate Edit on heap
@@ -171,7 +194,7 @@ pub fn delete(self: *TextBuffer, start: usize, end: usize) !?*Edit {
 
         if (piece_start < start) {
             try edit_ptr.new_pieces.append(self.allocator, .{
-                .buffer = piece.buffer,
+                .buffer_type = piece.buffer_type,
                 .start = piece.start,
                 .length = start - piece_start,
             });
@@ -181,7 +204,7 @@ pub fn delete(self: *TextBuffer, start: usize, end: usize) !?*Edit {
             // Middle deletion, we need the right part too
             const right_start = end - piece_start;
             try edit_ptr.new_pieces.append(self.allocator, .{
-                .buffer = piece.buffer,
+                .buffer_type = piece.buffer_type,
                 .start = piece.start + right_start,
                 .length = piece_end - end,
             });
@@ -189,7 +212,7 @@ pub fn delete(self: *TextBuffer, start: usize, end: usize) !?*Edit {
             // Trim start of piece (keep end)
             const trim = end - piece_start;
             try edit_ptr.new_pieces.append(self.allocator, .{
-                .buffer = piece.buffer,
+                .buffer_type = piece.buffer_type,
                 .start = piece.start + trim,
                 .length = piece.length - trim,
             });
@@ -218,25 +241,25 @@ pub fn delete(self: *TextBuffer, start: usize, end: usize) !?*Edit {
 }
 
 /// Get the total length of the document
-pub fn length(self: *const TextBuffer) usize {
+pub fn length(self: *const Buffer) usize {
     var total: usize = 0;
     for (self.pieces.items) |piece| total += piece.length;
     return total;
 }
 
 /// Get character at position
-pub fn charAt(self: *TextBuffer, pos: usize) ?u8 {
+pub fn charAt(self: *Buffer, pos: usize) ?u8 {
     const loc = self.findPieceIndexAt(pos);
     if (!loc.found) return null;
 
     const piece = self.pieces.items[loc.index];
     const local_pos = pos - loc.offset;
-    const buffer = if (piece.buffer == .original) self.original_buffer.items else self.add_buffer.items;
+    const buffer = if (piece.buffer_type == .original) self.original_buffer.items else self.add_buffer.items;
     return buffer[piece.start + local_pos];
 }
 
 /// Get a slice of text (allocates)
-pub fn getText(self: *const TextBuffer, start: usize, end: usize) ![]u8 {
+pub fn getText(self: *const Buffer, start: usize, end: usize) ![]u8 {
     if (start >= end) return try self.allocator.alloc(u8, 0);
     var result = try self.allocator.alloc(u8, end - start);
     var result_idx: usize = 0;
@@ -251,7 +274,7 @@ pub fn getText(self: *const TextBuffer, start: usize, end: usize) ![]u8 {
             continue;
         }
 
-        const buffer = if (piece.buffer == .original) self.original_buffer.items else self.add_buffer.items;
+        const buffer = if (piece.buffer_type == .original) self.original_buffer.items else self.add_buffer.items;
         const copy_start = if (piece_start < start) start - piece_start else 0;
         const copy_end = if (piece_end > end) end - piece_start else piece.length;
         const copy_len = copy_end - copy_start;
@@ -264,7 +287,7 @@ pub fn getText(self: *const TextBuffer, start: usize, end: usize) ![]u8 {
 }
 
 /// Get line and column from offset
-pub fn getLineCol(self: *const TextBuffer, pos: usize) !LineCol {
+pub fn getLineCol(self: *const Buffer, pos: usize) !LineCol {
     if (pos > self.length()) return error.OutOfBounds;
 
     var current_line: usize = 0;
@@ -272,7 +295,7 @@ pub fn getLineCol(self: *const TextBuffer, pos: usize) !LineCol {
     var offset: usize = 0;
 
     for (self.pieces.items) |piece| {
-        const buffer = if (piece.buffer == .original) self.original_buffer.items else self.add_buffer.items;
+        const buffer = if (piece.buffer_type == .original) self.original_buffer.items else self.add_buffer.items;
         const piece_len = piece.length;
 
         // If pos is beyond this piece
@@ -308,13 +331,13 @@ pub fn getLineCol(self: *const TextBuffer, pos: usize) !LineCol {
 }
 
 /// Get offset from line and column
-pub fn getOffset(self: *const TextBuffer, line: usize, col: usize) !usize {
+pub fn getOffset(self: *const Buffer, line: usize, col: usize) !usize {
     var current_line: usize = 0;
     var current_col: usize = 0;
     var offset: usize = 0;
 
     for (self.pieces.items) |piece| {
-        const buffer = if (piece.buffer == .original) self.original_buffer.items else self.add_buffer.items;
+        const buffer = if (piece.buffer_type == .original) self.original_buffer.items else self.add_buffer.items;
         const slice = buffer[piece.start .. piece.start + piece.length];
 
         // Optimization: Check if target line is even in this piece
@@ -353,6 +376,162 @@ pub fn getOffset(self: *const TextBuffer, line: usize, col: usize) !usize {
 }
 
 /// Get entire buffer content as string (allocates)
-pub fn toString(self: *const TextBuffer) ![]u8 {
+pub fn toString(self: *const Buffer) ![]u8 {
     return try self.getText(0, self.length());
+}
+
+test "Buffer: init and deinit" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), buffer.length());
+}
+
+test "Buffer: load" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    try buffer.load("Hello World");
+    try std.testing.expectEqual(@as(usize, 11), buffer.length());
+
+    const content = try buffer.toString();
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("Hello World", content);
+}
+
+test "Buffer: insert" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    try buffer.load("Hello");
+
+    // Insert at end
+    if (try buffer.insert(LineCol{.line = 0, .col = 5}, " World")) |edit| {
+        edit.deinit(allocator);
+        allocator.destroy(edit);
+    }
+    {
+        const content = try buffer.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("Hello World", content);
+    }
+
+    // Insert in middle
+    if (try buffer.insert(LineCol{.line = 0, .col = 5}, ",")) |edit| {
+        edit.deinit(allocator);
+        allocator.destroy(edit);
+    }
+    {
+        const content = try buffer.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("Hello, World", content);
+    }
+
+    // Insert at start
+    if (try buffer.insert(LineCol{.line = 0, .col = 0}, "> ")) |edit| {
+        edit.deinit(allocator);
+        allocator.destroy(edit);
+    }
+    {
+        const content = try buffer.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("> Hello, World", content);
+    }
+}
+
+test "Buffer: delete" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    try buffer.load("Hello, World");
+
+    // Delete ", "
+    if (try buffer.delete(LineCol{.line = 0, .col = 5}, LineCol{.line = 0, .col = 7})) |edit| {
+        edit.deinit(allocator);
+        allocator.destroy(edit);
+    }
+    {
+        const content = try buffer.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("HelloWorld", content);
+    }
+
+    // Delete start
+    if (try buffer.delete(LineCol{.line = 0, .col = 0}, LineCol{.line = 0, .col = 5})) |edit| {
+        edit.deinit(allocator);
+        allocator.destroy(edit);
+    }
+    {
+        const content = try buffer.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("World", content);
+    }
+
+    // Delete end
+    if (try buffer.delete(LineCol{.line = 0, .col = 3}, LineCol{.line = 0, .col = 5})) |edit| {
+        edit.deinit(allocator);
+        allocator.destroy(edit);
+    }
+    {
+        const content = try buffer.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("Wor", content);
+    }
+}
+
+test "Buffer: charAt" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+    try buffer.load("ABC");
+
+    try std.testing.expectEqual(@as(?u8, 'A'), buffer.charAt(0));
+    try std.testing.expectEqual(@as(?u8, 'B'), buffer.charAt(1));
+    try std.testing.expectEqual(@as(?u8, 'C'), buffer.charAt(2));
+    try std.testing.expectEqual(@as(?u8, null), buffer.charAt(3));
+}
+
+test "Buffer: getText" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+    try buffer.load("0123456789");
+
+    const slice = try buffer.getText(3, 7);
+    defer allocator.free(slice);
+    try std.testing.expectEqualStrings("3456", slice);
+}
+
+test "Buffer: getLineCol and getOffset" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+    try buffer.load("Hello\nWorld\n!");
+
+    // 012345 678901 2
+    // Hello\n World\n !
+
+    // 'H' -> 0,0
+    var lc = try buffer.getLineCol(0);
+    try std.testing.expectEqual(LineCol{ .line = 0, .col = 0 }, lc);
+    try std.testing.expectEqual(@as(usize, 0), try buffer.getOffset(0, 0));
+
+    // '\n' after Hello -> 0,5
+    lc = try buffer.getLineCol(5);
+    try std.testing.expectEqual(LineCol{ .line = 0, .col = 5 }, lc);
+    try std.testing.expectEqual(@as(usize, 5), try buffer.getOffset(0, 5));
+
+    // 'W' -> 1,0 (offset 6)
+    lc = try buffer.getLineCol(6);
+    try std.testing.expectEqual(LineCol{ .line = 1, .col = 0 }, lc);
+    try std.testing.expectEqual(@as(usize, 6), try buffer.getOffset(1, 0));
+
+    // '!' -> 2,0 (offset 12)
+    lc = try buffer.getLineCol(12);
+    try std.testing.expectEqual(LineCol{ .line = 2, .col = 0 }, lc);
+    try std.testing.expectEqual(@as(usize, 12), try buffer.getOffset(2, 0));
 }
