@@ -1,17 +1,21 @@
 const std = @import("std");
-const TextBuffer = @import("text_buffer.zig");
-const io = @import("io.zig");
-const search_mod = @import("search.zig"); // Renamed to avoid conflict with `search` function
-const History = @import("history.zig"); // Not used directly in this test, but good to have
-const Edit = @import("edit.zig"); // Need to import Edit to deinit it
+
+const core = @import("core");
+const TextBuffer = core.TextBuffer;
+const Edit = core.Edit;
+
+const features = @import("features");
+const Io = features.Io;
+const Search = features.Search;
+const History = features.History;
 
 test "save" {
     const allocator = std.testing.allocator;
     var buffer = TextBuffer.init(allocator);
     defer buffer.deinit();
 
-    try io.loadContent(&buffer, "Hello Save!");
-    try io.save(&buffer, "test_save.txt");
+    try Io.loadContent(&buffer, "Hello Save!");
+    try Io.save(&buffer, "test_save.txt");
     defer std.fs.cwd().deleteFile("test_save.txt") catch {};
 
     const file = try std.fs.cwd().openFile("test_save.txt", .{});
@@ -27,7 +31,7 @@ test "LineCol and Offset" {
     var buffer = TextBuffer.init(allocator);
     defer buffer.deinit();
 
-    try io.loadContent(&buffer, "Line1\nLine2\nLine3");
+    try Io.loadContent(&buffer, "Line1\nLine2\nLine3");
 
     // Check getLineCol
     const lc1 = try buffer.getLineCol(0); // 'L'
@@ -52,13 +56,13 @@ test "search across pieces" {
     var buffer = TextBuffer.init(allocator);
     defer buffer.deinit();
 
-    try io.loadContent(&buffer, "Hello");
+    try Io.loadContent(&buffer, "Hello");
     if (try buffer.insert(5, " World")) |edit_ptr| { // Handle the ?*Edit return type
         edit_ptr.deinit(allocator);
         allocator.destroy(edit_ptr);
     }
 
-    var results = try search_mod.search(&buffer, "lo Wo");
+    var results = try Search.search(&buffer, "lo Wo");
     defer results.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 1), results.items.len);
@@ -71,7 +75,7 @@ test "search boundary conditions" {
     defer buffer.deinit();
 
     // Create a buffer with two pieces
-    try io.loadContent(&buffer, "Part1");
+    try Io.loadContent(&buffer, "Part1");
     if (try buffer.insert(5, "Part2")) |edit_ptr| {
         edit_ptr.deinit(allocator);
         allocator.destroy(edit_ptr);
@@ -79,7 +83,7 @@ test "search boundary conditions" {
 
     // "Part1Part2"
     // Search for "1P" which crosses the boundary
-    var results = try search_mod.search(&buffer, "1P");
+    var results = try Search.search(&buffer, "1P");
     defer results.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 1), results.items.len);
@@ -91,10 +95,10 @@ test "replace and replaceAll" {
     var buffer = TextBuffer.init(allocator);
     defer buffer.deinit();
 
-    try io.loadContent(&buffer, "foo bar foo");
+    try Io.loadContent(&buffer, "foo bar foo");
 
     // Replace first foo with baz
-    try search_mod.replace(&buffer, 0, 3, "baz"); // search_mod.replace already handles deinit/destroy
+    try Search.replace(&buffer, 0, 3, "baz"); // Search.replace already handles deinit/destroy
     {
         const str = try buffer.toString();
         defer allocator.free(str);
@@ -107,8 +111,8 @@ test "replaceAll clean" {
     var buffer = TextBuffer.init(allocator);
     defer buffer.deinit();
 
-    try io.loadContent(&buffer, "foo bar foo");
-    try search_mod.replaceAll(&buffer, "foo", "baz"); // search_mod.replaceAll already handles deinit/destroy
+    try Io.loadContent(&buffer, "foo bar foo");
+    try Search.replaceAll(&buffer, "foo", "baz"); // Search.replaceAll already handles deinit/destroy
 
     const str = try buffer.toString();
     defer allocator.free(str);

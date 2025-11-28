@@ -1,8 +1,9 @@
 const std = @import("std");
 
-const Edit = @import("edit.zig");
-const TextBuffer = @import("text_buffer.zig");
-const Piece = @import("piece.zig");
+const core = @import("core");
+const Edit = core.Edit;
+const TextBuffer = core.TextBuffer;
+const Piece = core.Piece;
 
 const History = @This();
 

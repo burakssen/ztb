@@ -1,6 +1,9 @@
 const std = @import("std");
-const TextBuffer = @import("text_buffer.zig");
-const Edit = @import("edit.zig");
+
+const core = @import("core");
+const TextBuffer = core.TextBuffer;
+const Edit = core.Edit;
+const Piece = core.Piece;
 
 /// Search for a pattern in the buffer (correctly handling piece boundaries)
 pub fn search(buffer: *TextBuffer, pattern: []const u8) !std.ArrayList(usize) {
@@ -75,8 +78,6 @@ pub fn replace(buffer: *TextBuffer, start: usize, end: usize, text: []const u8) 
         buffer.allocator.destroy(edit_ptr);
     }
 }
-
-const Piece = @import("piece.zig");
 
 pub fn replaceAll(buffer: *TextBuffer, pattern: []const u8, replacement: []const u8) !void {
     var matches = try search(buffer, pattern);

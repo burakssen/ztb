@@ -1,8 +1,13 @@
 const std = @import("std");
-const TextBuffer = @import("text_buffer.zig");
-const History = @import("history.zig");
-const io = @import("io.zig");
-const Edit = @import("edit.zig");
+
+const core = @import("core");
+const TextBuffer = core.TextBuffer;
+const Edit = core.Edit;
+
+const features = @import("features");
+
+const History = features.History;
+const Io = features.Io;
 
 test "stress test: load and manipulate 1 million lines" {
     const allocator = std.testing.allocator;
@@ -36,7 +41,7 @@ test "stress test: load and manipulate 1 million lines" {
 
     // 2. Load content with timing
     const start_load = std.time.nanoTimestamp();
-    try io.loadContent(&buffer, raw_content.items);
+    try Io.loadContent(&buffer, raw_content.items);
     const end_load = std.time.nanoTimestamp();
     const load_time = @divFloor(end_load - start_load, 1_000_000);
 

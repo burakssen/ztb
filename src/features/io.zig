@@ -1,5 +1,6 @@
 const std = @import("std");
-const TextBuffer = @import("text_buffer.zig");
+const core = @import("core");
+const TextBuffer = core.TextBuffer;
 
 pub fn loadContent(buffer: *TextBuffer, content: []const u8) !void {
     try buffer.original_buffer.appendSlice(buffer.allocator, content);

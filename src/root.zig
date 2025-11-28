@@ -1,14 +1,13 @@
-pub const Piece = @import("piece.zig");
-pub const Edit = @import("edit.zig");
-pub const TextBuffer = @import("text_buffer.zig");
-pub const History = @import("history.zig");
-pub const LineCol = @import("line_col.zig");
-pub const Cursor = @import("cursor.zig");
+const core = @import("core");
 
-pub const search = @import("search.zig");
-pub const io = @import("io.zig");
+pub const Piece = core.Piece;
+pub const Edit = core.Edit;
+pub const TextBuffer = core.TextBuffer;
+pub const LineCol = core.LineCol;
+pub const Cursor = core.Cursor;
 
-test {
-    _ = @import("stress_test.zig");
-    _ = @import("test_features.zig");
-}
+const features = @import("features");
+
+pub const History = features.History;
+pub const Search = features.Search;
+pub const Io = features.Io;
